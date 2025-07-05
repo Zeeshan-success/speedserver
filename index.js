@@ -18,11 +18,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // CORS configuration - Allow all origins for development
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Upload-Start', 'X-Connection-Id', 'X-Total-Connections', 'X-Test-Size', 'X-Pattern']
-}));
+app.use(cors());
 
 // Middleware for parsing JSON and raw data
 app.use(express.json({ limit: '500mb' }));
