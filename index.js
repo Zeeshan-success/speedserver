@@ -19,7 +19,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // CORS configuration - Allow all origins for development
 app.use(cors({
-  origin: 'http://localhost:3000', // Or '*' to allow all origins (for dev only)
+  origin: ['http://localhost:3000',"https://splendid-brioche-ee2e1c.netlify.app"], // Or '*' to allow all origins (for dev only)
   methods: ['GET', 'POST'],
   credentials: true
 }));
