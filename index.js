@@ -25,6 +25,7 @@ app.use(
       "https://splendid-brioche-ee2e1c.netlify.app",
       "https://zemoz.fun",
       "https://speedtestoffical.netlify.app",
+      'https://zemoz.fun/'
     ],
     methods: ["GET", "POST"],
     credentials: true,
