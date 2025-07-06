@@ -23,7 +23,7 @@ app.use(
     origin: [
       "http://localhost:3000",
       "https://splendid-brioche-ee2e1c.netlify.app",
-      "http://zemoz.fun",'speedtestoffical.netlify.app',
+      "https://zemoz.fun",'speedtestoffical.netlify.app',
     ], // Or '*' to allow all origins (for dev only)
     methods: ["GET", "POST"],
     credentials: true,
