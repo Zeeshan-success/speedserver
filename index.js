@@ -335,17 +335,103 @@ app.get("/api/download/:size", (req, res) => {
 });
 
 // COMPLETELY FIXED Adaptive download endpoint
+// app.get("/api/download-adaptive", (req, res) => {
+//   const initialSize = Math.max(parseFloat(req.query.initial) || 1, 0.1);
+//   const maxSize = Math.min(parseFloat(req.query.max) || 5, 10);
+//   const duration = Math.min(parseInt(req.query.duration) || 5, 10);
+//   const pattern = req.query.pattern || "random";
+
+//   const startTime = getHighResolutionTime();
+//   let currentSize = initialSize;
+//   let isFinished = false;
+
+//   // Set response headers
+//   res.setHeader("Content-Type", "application/octet-stream");
+//   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+//   res.setHeader("Pragma", "no-cache");
+//   res.setHeader("Expires", "0");
+//   res.setHeader("X-Test-Type", "adaptive");
+//   res.setHeader("X-Start-Time", startTime.toString());
+//   res.setHeader("X-Pattern", pattern);
+//   res.setHeader("X-Initial-Size", initialSize.toString());
+//   res.setHeader("X-Max-Size", maxSize.toString());
+//   res.setHeader("X-Duration", duration.toString());
+
+//   const cleanup = () => {
+//     isFinished = true;
+//   };
+
+//   const sendData = () => {
+//     if (isFinished || res.destroyed) return;
+
+//     const now = getHighResolutionTime();
+//     const elapsed = (now - startTime) / 1000;
+
+//     // Check if duration has been reached
+//     if (elapsed >= duration) {
+//       if (!res.destroyed && !isFinished) {
+//         res.end();
+//       }
+//       cleanup();
+//       return;
+//     }
+
+//     // Adaptive sizing - gradually increase size
+//     const progress = elapsed / duration;
+//     const targetSize =
+//       initialSize + (maxSize - initialSize) * Math.min(progress * 2, 1);
+//     currentSize = Math.min(targetSize, maxSize);
+
+//     try {
+//       // Generate smaller chunks more frequently for better control
+//       const chunkSize = Math.max(currentSize * 0.1, 0.1); // 10% of current size or minimum 0.1MB
+//       const chunkData = generateTestData(chunkSize, pattern);
+
+//       if (!res.destroyed && !isFinished) {
+//         const writeSuccess = res.write(chunkData);
+
+//         // Schedule next chunk
+//         const nextDelay = Math.max(50, 200 - elapsed * 10); // Decrease delay over time
+
+//         if (writeSuccess) {
+//           setTimeout(sendData, nextDelay);
+//         } else {
+//           res.once("drain", () => setTimeout(sendData, nextDelay));
+//         }
+//       }
+//     } catch (error) {
+//       console.error("Error in adaptive download:", error);
+//       if (!res.destroyed && !isFinished) {
+//         res.end();
+//       }
+//       cleanup();
+//     }
+//   };
+
+//   // Handle client disconnect and errors
+//   req.on("close", cleanup);
+//   req.on("aborted", cleanup);
+//   res.on("close", cleanup);
+//   res.on("error", (error) => {
+//     console.error("Response error in adaptive download:", error);
+//     cleanup();
+//   });
+
+//   // Start the adaptive download
+//   sendData();
+// });
 app.get("/api/download-adaptive", (req, res) => {
-  const initialSize = Math.max(parseFloat(req.query.initial) || 1, 0.1);
-  const maxSize = Math.min(parseFloat(req.query.max) || 5, 10);
-  const duration = Math.min(parseInt(req.query.duration) || 5, 10);
+  const initialSize = Math.max(parseFloat(req.query.initial) || 1, 0.1); // MB
+  const maxSize = Math.min(parseFloat(req.query.max) || 5, 10); // MB
+  const duration = Math.min(parseInt(req.query.duration) || 5, 10); // seconds
   const pattern = req.query.pattern || "random";
+  const throttle = Math.max(parseFloat(req.query.throttle) || 1, 0.1); // 0.1 = 90% slower
 
   const startTime = getHighResolutionTime();
   let currentSize = initialSize;
   let isFinished = false;
 
-  // Set response headers
+  // Headers
   res.setHeader("Content-Type", "application/octet-stream");
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Pragma", "no-cache");
@@ -356,6 +442,7 @@ app.get("/api/download-adaptive", (req, res) => {
   res.setHeader("X-Initial-Size", initialSize.toString());
   res.setHeader("X-Max-Size", maxSize.toString());
   res.setHeader("X-Duration", duration.toString());
+  res.setHeader("X-Throttle", throttle.toString());
 
   const cleanup = () => {
     isFinished = true;
@@ -367,31 +454,28 @@ app.get("/api/download-adaptive", (req, res) => {
     const now = getHighResolutionTime();
     const elapsed = (now - startTime) / 1000;
 
-    // Check if duration has been reached
     if (elapsed >= duration) {
-      if (!res.destroyed && !isFinished) {
-        res.end();
-      }
+      if (!res.destroyed && !isFinished) res.end();
       cleanup();
       return;
     }
 
-    // Adaptive sizing - gradually increase size
+    // Progress-based sizing
     const progress = elapsed / duration;
     const targetSize =
       initialSize + (maxSize - initialSize) * Math.min(progress * 2, 1);
     currentSize = Math.min(targetSize, maxSize);
 
     try {
-      // Generate smaller chunks more frequently for better control
-      const chunkSize = Math.max(currentSize * 0.1, 0.1); // 10% of current size or minimum 0.1MB
+      // Slower: small chunk size and longer delay
+      const chunkSize = Math.max(currentSize * 0.03 * throttle, 0.05); // ~50KB+
       const chunkData = generateTestData(chunkSize, pattern);
 
       if (!res.destroyed && !isFinished) {
         const writeSuccess = res.write(chunkData);
 
-        // Schedule next chunk
-        const nextDelay = Math.max(50, 200 - elapsed * 10); // Decrease delay over time
+        // Slower: stable or increasing delay
+        const nextDelay = Math.min(300, 100 + elapsed * 10 / throttle);
 
         if (writeSuccess) {
           setTimeout(sendData, nextDelay);
@@ -401,14 +485,11 @@ app.get("/api/download-adaptive", (req, res) => {
       }
     } catch (error) {
       console.error("Error in adaptive download:", error);
-      if (!res.destroyed && !isFinished) {
-        res.end();
-      }
+      if (!res.destroyed && !isFinished) res.end();
       cleanup();
     }
   };
 
-  // Handle client disconnect and errors
   req.on("close", cleanup);
   req.on("aborted", cleanup);
   res.on("close", cleanup);
@@ -417,9 +498,9 @@ app.get("/api/download-adaptive", (req, res) => {
     cleanup();
   });
 
-  // Start the adaptive download
   sendData();
 });
+
 
 // Upload test endpoint
 app.post("/api/upload", upload.single("file"), (req, res) => {
