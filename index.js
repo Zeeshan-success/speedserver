@@ -17,27 +17,29 @@ process.on("unhandledRejection", (reason, promise) => {
   process.exit(1);
 });
 
-// CORS configuration - Allow all origins for development
+// CORS configuration
 app.use(
   cors({
     origin: [
       "http://localhost:3000",
       "https://splendid-brioche-ee2e1c.netlify.app",
-      "https://zemoz.fun",'speedtestoffical.netlify.app',
-    ], // Or '*' to allow all origins (for dev only)
+      "https://zemoz.fun",
+      "https://speedtestoffical.netlify.app",
+    ],
     methods: ["GET", "POST"],
     credentials: true,
   })
 );
 
-// Middleware for parsing JSON and raw data
-app.use(express.json({ limit: "500mb" }));
-app.use(express.raw({ limit: "500mb", type: "application/octet-stream" }));
+// Middleware with proper limits
+app.use(express.json({ limit: "10mb" }));
+app.use(express.raw({ limit: "10mb", type: "application/octet-stream" }));
 
-// Configure multer for file uploads
+// Configure multer with strict limits
 const upload = multer({
   limits: {
-    fileSize: 500 * 1024 * 1024, // 500MB
+    fileSize: 10 * 1024 * 1024, // 10MB max
+    files: 1,
   },
   storage: multer.memoryStorage(),
 });
@@ -54,17 +56,29 @@ const SERVER_INFO = {
   memory: Math.round(os.totalmem() / 1024 / 1024 / 1024) + "GB",
 };
 
-// Test data cache for performance
+// Optimized test data cache
 const testDataCache = new Map();
+const MAX_CACHE_SIZE = 50 * 1024 * 1024; // 50MB total cache
+let currentCacheSize = 0;
 
-// Generate test data with caching
+// Generate test data with size limits and better caching
 const generateTestData = (sizeInMB, pattern = "random") => {
-  const key = `${sizeInMB}mb_${pattern}`;
+  // Enforce maximum size limit
+  const maxSize = 10;
+  const actualSize = Math.min(sizeInMB, maxSize);
+  const key = `${actualSize}mb_${pattern}`;
 
   if (!testDataCache.has(key)) {
-    const sizeInBytes = sizeInMB * 1024 * 1024;
+    const sizeInBytes = actualSize * 1024 * 1024;
+    
+    // Check cache size limit
+    if (currentCacheSize + sizeInBytes > MAX_CACHE_SIZE) {
+      // Clear cache if it's getting too large
+      testDataCache.clear();
+      currentCacheSize = 0;
+    }
+    
     let buffer;
-
     switch (pattern) {
       case "random":
         buffer = crypto.randomBytes(sizeInBytes);
@@ -83,16 +97,16 @@ const generateTestData = (sizeInMB, pattern = "random") => {
     }
 
     testDataCache.set(key, buffer);
+    currentCacheSize += sizeInBytes;
   }
 
   return testDataCache.get(key);
 };
 
-// Pre-generate common test data sizes
-const commonSizes = [0.1, 0.5, 1, 2, 5, 10, 25, 50];
+// Pre-generate smaller test data sizes only
+const commonSizes = [0.1, 0.5, 1, 2, 5]; // Removed larger sizes
 commonSizes.forEach((size) => {
   generateTestData(size, "random");
-  generateTestData(size, "compressible");
 });
 
 // High-resolution timestamp
@@ -128,71 +142,57 @@ app.get("/api/info", (req, res) => {
   });
 });
 
-// Enhanced latency test endpoint
+// Optimized latency test endpoint
 app.get("/api/latency-advanced", (req, res) => {
   const count = Math.min(parseInt(req.query.count) || 5, 10);
-  const interval = Math.max(parseInt(req.query.interval) || 50, 100);
-
   const measurements = [];
-  let completed = 0;
   const startTime = getHighResolutionTime();
 
-  const performMeasurement = (index) => {
+  for (let i = 0; i < count; i++) {
     const measurementTime = getHighResolutionTime();
-
     measurements.push({
-      index,
+      index: i,
       clientStartTime: startTime,
       serverTime: measurementTime,
       latency: measurementTime - startTime,
     });
+  }
 
-    completed++;
+  // Calculate statistics
+  const latencies = measurements.map((m) => m.latency);
+  const average = latencies.reduce((a, b) => a + b, 0) / latencies.length;
+  const min = Math.min(...latencies);
+  const max = Math.max(...latencies);
+  const jitter = max - min;
 
-    if (completed >= count) {
-      // Calculate statistics
-      const latencies = measurements.map((m) => m.latency);
-      const average = latencies.reduce((a, b) => a + b, 0) / latencies.length;
-      const min = Math.min(...latencies);
-      const max = Math.max(...latencies);
-      const jitter = max - min;
-
-      res.json({
-        measurements,
-        statistics: {
-          count: completed,
-          average: average.toFixed(3),
-          minimum: min.toFixed(3),
-          maximum: max.toFixed(3),
-          jitter: jitter.toFixed(3),
-        },
-        server: SERVER_INFO.name,
-      });
-    } else {
-      setTimeout(() => performMeasurement(index + 1), interval);
-    }
-  };
-
-  performMeasurement(0);
+  res.json({
+    measurements,
+    statistics: {
+      count,
+      average: average.toFixed(3),
+      minimum: min.toFixed(3),
+      maximum: max.toFixed(3),
+      jitter: jitter.toFixed(3),
+    },
+    server: SERVER_INFO.name,
+  });
 });
 
-// FIXED Warmup endpoint
+// Optimized warmup endpoint
 app.get("/api/warmup-advanced", (req, res) => {
   const startTime = getHighResolutionTime();
 
-  // Set headers
   res.setHeader("Content-Type", "application/octet-stream");
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
   res.setHeader("X-Warmup-Start", startTime.toString());
 
-  // Send warmup data in phases
+  // Smaller warmup phases
   const phases = [
-    { size: 0.1, delay: 100 },
-    { size: 0.5, delay: 150 },
-    { size: 1.0, delay: 200 },
-    { size: 2.0, delay: 250 },
+    { size: 0.1, delay: 50 },
+    { size: 0.25, delay: 75 },
+    { size: 0.5, delay: 100 },
   ];
 
   let currentPhase = 0;
@@ -227,7 +227,6 @@ app.get("/api/warmup-advanced", (req, res) => {
             res.once("drain", () => setTimeout(sendPhase, phase.delay));
           }
         } else {
-          // This is the last phase
           setTimeout(() => {
             if (!isFinished && !res.destroyed) {
               res.end();
@@ -245,22 +244,20 @@ app.get("/api/warmup-advanced", (req, res) => {
     }
   };
 
-  // Handle client disconnect
   req.on("close", cleanup);
   req.on("aborted", cleanup);
   res.on("close", cleanup);
   res.on("error", cleanup);
 
-  // Start sending phases
   sendPhase();
 });
 
-// FIXED Download test endpoint
+// Fixed download test endpoint with proper size limits
 app.get("/api/download/:size", (req, res) => {
   const size = parseFloat(req.params.size);
   const pattern = req.query.pattern || "random";
-  const connections = parseInt(req.query.connections) || 1;
 
+  // Enforce size limits
   if (isNaN(size) || size < 0.1 || size > 10) {
     return res
       .status(400)
@@ -279,10 +276,9 @@ app.get("/api/download/:size", (req, res) => {
     res.setHeader("X-Test-Start", startTime.toString());
     res.setHeader("X-Test-Size", size.toString());
     res.setHeader("X-Pattern", pattern);
-    res.setHeader("X-Connections", connections.toString());
 
-    // Send data in chunks
-    const chunkSize = 64 * 1024; // 64KB chunks
+    // Send data in fixed-size chunks
+    const chunkSize = 64 * 1024; // Fixed 64KB chunks
     let offset = 0;
     let isFinished = false;
 
@@ -319,7 +315,6 @@ app.get("/api/download/:size", (req, res) => {
       }
     };
 
-    // Handle client disconnect
     req.on("close", cleanup);
     req.on("aborted", cleanup);
     res.on("close", cleanup);
@@ -334,104 +329,16 @@ app.get("/api/download/:size", (req, res) => {
   }
 });
 
-// COMPLETELY FIXED Adaptive download endpoint
-// app.get("/api/download-adaptive", (req, res) => {
-//   const initialSize = Math.max(parseFloat(req.query.initial) || 1, 0.1);
-//   const maxSize = Math.min(parseFloat(req.query.max) || 5, 10);
-//   const duration = Math.min(parseInt(req.query.duration) || 5, 10);
-//   const pattern = req.query.pattern || "random";
-
-//   const startTime = getHighResolutionTime();
-//   let currentSize = initialSize;
-//   let isFinished = false;
-
-//   // Set response headers
-//   res.setHeader("Content-Type", "application/octet-stream");
-//   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-//   res.setHeader("Pragma", "no-cache");
-//   res.setHeader("Expires", "0");
-//   res.setHeader("X-Test-Type", "adaptive");
-//   res.setHeader("X-Start-Time", startTime.toString());
-//   res.setHeader("X-Pattern", pattern);
-//   res.setHeader("X-Initial-Size", initialSize.toString());
-//   res.setHeader("X-Max-Size", maxSize.toString());
-//   res.setHeader("X-Duration", duration.toString());
-
-//   const cleanup = () => {
-//     isFinished = true;
-//   };
-
-//   const sendData = () => {
-//     if (isFinished || res.destroyed) return;
-
-//     const now = getHighResolutionTime();
-//     const elapsed = (now - startTime) / 1000;
-
-//     // Check if duration has been reached
-//     if (elapsed >= duration) {
-//       if (!res.destroyed && !isFinished) {
-//         res.end();
-//       }
-//       cleanup();
-//       return;
-//     }
-
-//     // Adaptive sizing - gradually increase size
-//     const progress = elapsed / duration;
-//     const targetSize =
-//       initialSize + (maxSize - initialSize) * Math.min(progress * 2, 1);
-//     currentSize = Math.min(targetSize, maxSize);
-
-//     try {
-//       // Generate smaller chunks more frequently for better control
-//       const chunkSize = Math.max(currentSize * 0.1, 0.1); // 10% of current size or minimum 0.1MB
-//       const chunkData = generateTestData(chunkSize, pattern);
-
-//       if (!res.destroyed && !isFinished) {
-//         const writeSuccess = res.write(chunkData);
-
-//         // Schedule next chunk
-//         const nextDelay = Math.max(50, 200 - elapsed * 10); // Decrease delay over time
-
-//         if (writeSuccess) {
-//           setTimeout(sendData, nextDelay);
-//         } else {
-//           res.once("drain", () => setTimeout(sendData, nextDelay));
-//         }
-//       }
-//     } catch (error) {
-//       console.error("Error in adaptive download:", error);
-//       if (!res.destroyed && !isFinished) {
-//         res.end();
-//       }
-//       cleanup();
-//     }
-//   };
-
-//   // Handle client disconnect and errors
-//   req.on("close", cleanup);
-//   req.on("aborted", cleanup);
-//   res.on("close", cleanup);
-//   res.on("error", (error) => {
-//     console.error("Response error in adaptive download:", error);
-//     cleanup();
-//   });
-
-//   // Start the adaptive download
-//   sendData();
-// });
+// Completely rewritten adaptive download endpoint
 app.get("/api/download-adaptive", (req, res) => {
-  const initialSize = Math.max(parseFloat(req.query.initial) || 1, 0.1); // MB
-  const maxSize = Math.min(parseFloat(req.query.max) || 5, 10); // MB
-  const duration = Math.min(parseInt(req.query.duration) || 5, 10); // seconds
+  const maxSize = Math.min(parseFloat(req.query.max) || 5, 10); // Max 10MB
+  const duration = Math.min(parseInt(req.query.duration) || 10, 30); // Max 30 seconds
   const pattern = req.query.pattern || "random";
-  const throttle = Math.max(parseFloat(req.query.throttle) || 1, 0.1); // 0.1 = 90% slower
 
   const startTime = getHighResolutionTime();
-  let currentSize = initialSize;
+  let totalSent = 0;
   let isFinished = false;
 
-  // Headers
   res.setHeader("Content-Type", "application/octet-stream");
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Pragma", "no-cache");
@@ -439,10 +346,13 @@ app.get("/api/download-adaptive", (req, res) => {
   res.setHeader("X-Test-Type", "adaptive");
   res.setHeader("X-Start-Time", startTime.toString());
   res.setHeader("X-Pattern", pattern);
-  res.setHeader("X-Initial-Size", initialSize.toString());
   res.setHeader("X-Max-Size", maxSize.toString());
   res.setHeader("X-Duration", duration.toString());
-  res.setHeader("X-Throttle", throttle.toString());
+
+  // Pre-generate fixed chunk sizes to reuse
+  const smallChunk = generateTestData(0.1, pattern); // 100KB
+  const mediumChunk = generateTestData(0.25, pattern); // 250KB
+  const largeChunk = generateTestData(0.5, pattern); // 500KB
 
   const cleanup = () => {
     isFinished = true;
@@ -454,38 +364,50 @@ app.get("/api/download-adaptive", (req, res) => {
     const now = getHighResolutionTime();
     const elapsed = (now - startTime) / 1000;
 
-    if (elapsed >= duration) {
-      if (!res.destroyed && !isFinished) res.end();
+    // Stop after duration or max size reached
+    if (elapsed >= duration || totalSent >= maxSize * 1024 * 1024) {
+      if (!res.destroyed && !isFinished) {
+        res.end();
+      }
       cleanup();
       return;
     }
 
-    // Progress-based sizing
-    const progress = elapsed / duration;
-    const targetSize =
-      initialSize + (maxSize - initialSize) * Math.min(progress * 2, 1);
-    currentSize = Math.min(targetSize, maxSize);
-
     try {
-      // Slower: small chunk size and longer delay
-      const chunkSize = Math.max(currentSize * 0.03 * throttle, 0.05); // ~50KB+
-      const chunkData = generateTestData(chunkSize, pattern);
+      // Choose chunk size based on elapsed time, but keep it reasonable
+      let chunkToSend;
+      if (elapsed < 2) {
+        chunkToSend = smallChunk;
+      } else if (elapsed < 5) {
+        chunkToSend = mediumChunk;
+      } else {
+        chunkToSend = largeChunk;
+      }
 
-      if (!res.destroyed && !isFinished) {
-        const writeSuccess = res.write(chunkData);
+      // Don't exceed max size
+      const remainingBytes = (maxSize * 1024 * 1024) - totalSent;
+      if (chunkToSend.length > remainingBytes) {
+        chunkToSend = chunkToSend.slice(0, remainingBytes);
+      }
 
-        // Slower: stable or increasing delay
-        const nextDelay = Math.min(300, 100 + elapsed * 10 / throttle);
+      if (!res.destroyed && !isFinished && chunkToSend.length > 0) {
+        const writeSuccess = res.write(chunkToSend);
+        totalSent += chunkToSend.length;
+
+        // Fixed delay instead of complex calculation
+        const delay = 100; // 100ms delay
 
         if (writeSuccess) {
-          setTimeout(sendData, nextDelay);
+          setTimeout(sendData, delay);
         } else {
-          res.once("drain", () => setTimeout(sendData, nextDelay));
+          res.once("drain", () => setTimeout(sendData, delay));
         }
       }
     } catch (error) {
       console.error("Error in adaptive download:", error);
-      if (!res.destroyed && !isFinished) res.end();
+      if (!res.destroyed && !isFinished) {
+        res.end();
+      }
       cleanup();
     }
   };
@@ -493,16 +415,12 @@ app.get("/api/download-adaptive", (req, res) => {
   req.on("close", cleanup);
   req.on("aborted", cleanup);
   res.on("close", cleanup);
-  res.on("error", (error) => {
-    console.error("Response error in adaptive download:", error);
-    cleanup();
-  });
+  res.on("error", cleanup);
 
   sendData();
 });
 
-
-// Upload test endpoint
+// Fixed upload test endpoint with proper validation
 app.post("/api/upload", upload.single("file"), (req, res) => {
   const receiveStartTime = getHighResolutionTime();
   const clientStartTime =
@@ -522,6 +440,15 @@ app.post("/api/upload", upload.single("file"), (req, res) => {
       dataBuffer = req.body;
     } else {
       return res.status(400).json({ error: "No data received" });
+    }
+
+    // Validate size limits
+    if (dataSize > 10 * 1024 * 1024) {
+      return res.status(413).json({ 
+        error: "File too large. Maximum size is 10MB",
+        receivedSize: dataSize,
+        maxSize: 10 * 1024 * 1024
+      });
     }
 
     const receiveEndTime = getHighResolutionTime();
@@ -555,6 +482,7 @@ app.post("/api/upload", upload.single("file"), (req, res) => {
         expectedSize: testSize,
         pattern,
         integrity: checksum,
+        sizeMB: (dataSize / (1024 * 1024)).toFixed(2),
       },
       performance: {
         speedMbps: speedMbps.toFixed(3),
@@ -576,7 +504,7 @@ app.post("/api/upload", upload.single("file"), (req, res) => {
   }
 });
 
-// Multi-connection upload endpoint
+// Multi-connection upload endpoint with size validation
 app.post("/api/upload-multi", upload.single("file"), (req, res) => {
   const receiveTime = getHighResolutionTime();
   const clientStartTime =
@@ -595,6 +523,16 @@ app.post("/api/upload-multi", upload.single("file"), (req, res) => {
       dataSize = req.body.length;
     } else {
       return res.status(400).json({ error: "No data received" });
+    }
+
+    // Validate size limits
+    if (dataSize > 10 * 1024 * 1024) {
+      return res.status(413).json({ 
+        error: "File too large. Maximum size is 10MB per connection",
+        receivedSize: dataSize,
+        maxSize: 10 * 1024 * 1024,
+        connectionId
+      });
     }
 
     const processTime = getHighResolutionTime();
@@ -625,6 +563,7 @@ app.post("/api/upload-multi", upload.single("file"), (req, res) => {
         expectedSize: testSize,
         pattern,
         speedMbps: speedMbps.toFixed(3),
+        sizeMB: (dataSize / (1024 * 1024)).toFixed(2),
       },
       server: SERVER_INFO.name,
     });
@@ -671,30 +610,729 @@ const server = app.listen(PORT, () => {
   console.log(`💻 System: ${SERVER_INFO.platform} (${SERVER_INFO.arch})`);
   console.log(`⚡ Cores: ${SERVER_INFO.cores}`);
   console.log(`🧠 Memory: ${SERVER_INFO.memory}`);
+  console.log(`📊 Max file size: 10MB`);
   console.log(`\n📋 Available Endpoints:`);
   console.log(`   GET  /api/ping                    - Basic ping test`);
   console.log(`   GET  /api/info                    - Server information`);
   console.log(`   GET  /api/latency-advanced        - Advanced latency test`);
   console.log(`   GET  /api/warmup-advanced         - Connection warmup`);
-  console.log(`   GET  /api/download/:size          - Download test`);
+  console.log(`   GET  /api/download/:size          - Download test (0.1-10MB)`);
   console.log(`   GET  /api/download-adaptive       - Adaptive download test`);
-  console.log(`   POST /api/upload                  - Upload test`);
+  console.log(`   POST /api/upload                  - Upload test (max 10MB)`);
   console.log(`   POST /api/upload-multi            - Multi-connection upload`);
   console.log(`\n✅ Server ready for testing!\n`);
 });
 
 // Server optimization
-server.keepAliveTimeout = 120000;
-server.headersTimeout = 125000;
-server.timeout = 300000;
+server.keepAliveTimeout = 60000; // Reduced from 120000
+server.headersTimeout = 65000; // Reduced from 125000
+server.timeout = 120000; // Reduced from 300000
 
 // TCP optimization
 server.on("connection", (socket) => {
   socket.setNoDelay(true);
-  socket.setKeepAlive(true, 60000);
+  socket.setKeepAlive(true, 30000); // Reduced from 60000
 });
 
 module.exports = app;
+// working code 
+// const express = require("express");
+// const cors = require("cors");
+// const multer = require("multer");
+// const crypto = require("crypto");
+// const os = require("os");
+// const { performance } = require("perf_hooks");
+// const app = express();
+
+// // Process error handling
+// process.on("uncaughtException", (error) => {
+//   console.error("Uncaught Exception:", error);
+//   process.exit(1);
+// });
+
+// process.on("unhandledRejection", (reason, promise) => {
+//   console.error("Unhandled Rejection at:", promise, "reason:", reason);
+//   process.exit(1);
+// });
+
+// // CORS configuration - Allow all origins for development
+// app.use(
+//   cors({
+//     origin: [
+//       "http://localhost:3000",
+//       "https://splendid-brioche-ee2e1c.netlify.app",
+//       "https://zemoz.fun",'speedtestoffical.netlify.app',
+//     ], // Or '*' to allow all origins (for dev only)
+//     methods: ["GET", "POST"],
+//     credentials: true,
+//   })
+// );
+
+// // Middleware for parsing JSON and raw data
+// app.use(express.json({ limit: "500mb" }));
+// app.use(express.raw({ limit: "500mb", type: "application/octet-stream" }));
+
+// // Configure multer for file uploads
+// const upload = multer({
+//   limits: {
+//     fileSize: 500 * 1024 * 1024, // 500MB
+//   },
+//   storage: multer.memoryStorage(),
+// });
+
+// // Server configuration
+// const PORT = process.env.PORT || 3001;
+// const SERVER_INFO = {
+//   name: "Speed Test Server",
+//   location: "Local",
+//   host: os.hostname(),
+//   platform: os.platform(),
+//   arch: os.arch(),
+//   cores: os.cpus().length,
+//   memory: Math.round(os.totalmem() / 1024 / 1024 / 1024) + "GB",
+// };
+
+// // Test data cache for performance
+// const testDataCache = new Map();
+
+// // Generate test data with caching
+// const generateTestData = (sizeInMB, pattern = "random") => {
+//   const key = `${sizeInMB}mb_${pattern}`;
+
+//   if (!testDataCache.has(key)) {
+//     const sizeInBytes = sizeInMB * 1024 * 1024;
+//     let buffer;
+
+//     switch (pattern) {
+//       case "random":
+//         buffer = crypto.randomBytes(sizeInBytes);
+//         break;
+//       case "compressible":
+//         buffer = Buffer.alloc(sizeInBytes, 0x41);
+//         break;
+//       case "incompressible":
+//         buffer = Buffer.alloc(sizeInBytes);
+//         for (let i = 0; i < sizeInBytes; i++) {
+//           buffer[i] = (i * 137 + 19) % 256;
+//         }
+//         break;
+//       default:
+//         buffer = crypto.randomBytes(sizeInBytes);
+//     }
+
+//     testDataCache.set(key, buffer);
+//   }
+
+//   return testDataCache.get(key);
+// };
+
+// // Pre-generate common test data sizes
+// const commonSizes = [0.1, 0.5, 1, 2, 5, 10, 25, 50];
+// commonSizes.forEach((size) => {
+//   generateTestData(size, "random");
+//   generateTestData(size, "compressible");
+// });
+
+// // High-resolution timestamp
+// const getHighResolutionTime = () => {
+//   return performance.now() + performance.timeOrigin;
+// };
+
+// // Basic ping endpoint
+// app.get("/api/ping", (req, res) => {
+//   const serverTime = getHighResolutionTime();
+//   const clientTime = parseFloat(req.query.t) || serverTime;
+//   const sequence = parseInt(req.query.seq) || 0;
+
+//   res.json({
+//     clientTime,
+//     serverTime,
+//     sequence,
+//     server: SERVER_INFO.name,
+//   });
+// });
+
+// // Server info endpoint
+// app.get("/api/info", (req, res) => {
+//   res.json({
+//     server: SERVER_INFO,
+//     timestamp: getHighResolutionTime(),
+//     uptime: process.uptime(),
+//     memory: {
+//       used: process.memoryUsage().rss,
+//       total: os.totalmem(),
+//       free: os.freemem(),
+//     },
+//   });
+// });
+
+// // Enhanced latency test endpoint
+// app.get("/api/latency-advanced", (req, res) => {
+//   const count = Math.min(parseInt(req.query.count) || 5, 10);
+//   const interval = Math.max(parseInt(req.query.interval) || 50, 100);
+
+//   const measurements = [];
+//   let completed = 0;
+//   const startTime = getHighResolutionTime();
+
+//   const performMeasurement = (index) => {
+//     const measurementTime = getHighResolutionTime();
+
+//     measurements.push({
+//       index,
+//       clientStartTime: startTime,
+//       serverTime: measurementTime,
+//       latency: measurementTime - startTime,
+//     });
+
+//     completed++;
+
+//     if (completed >= count) {
+//       // Calculate statistics
+//       const latencies = measurements.map((m) => m.latency);
+//       const average = latencies.reduce((a, b) => a + b, 0) / latencies.length;
+//       const min = Math.min(...latencies);
+//       const max = Math.max(...latencies);
+//       const jitter = max - min;
+
+//       res.json({
+//         measurements,
+//         statistics: {
+//           count: completed,
+//           average: average.toFixed(3),
+//           minimum: min.toFixed(3),
+//           maximum: max.toFixed(3),
+//           jitter: jitter.toFixed(3),
+//         },
+//         server: SERVER_INFO.name,
+//       });
+//     } else {
+//       setTimeout(() => performMeasurement(index + 1), interval);
+//     }
+//   };
+
+//   performMeasurement(0);
+// });
+
+// // FIXED Warmup endpoint
+// app.get("/api/warmup-advanced", (req, res) => {
+//   const startTime = getHighResolutionTime();
+
+//   // Set headers
+//   res.setHeader("Content-Type", "application/octet-stream");
+//   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+//   res.setHeader("Pragma", "no-cache");
+//   res.setHeader("Expires", "0");
+//   res.setHeader("X-Warmup-Start", startTime.toString());
+
+//   // Send warmup data in phases
+//   const phases = [
+//     { size: 0.1, delay: 100 },
+//     { size: 0.5, delay: 150 },
+//     { size: 1.0, delay: 200 },
+//     { size: 2.0, delay: 250 },
+//   ];
+
+//   let currentPhase = 0;
+//   let isFinished = false;
+
+//   const cleanup = () => {
+//     isFinished = true;
+//   };
+
+//   const sendPhase = () => {
+//     if (isFinished || res.destroyed) return;
+
+//     if (currentPhase >= phases.length) {
+//       res.end();
+//       cleanup();
+//       return;
+//     }
+
+//     const phase = phases[currentPhase];
+
+//     try {
+//       const phaseData = generateTestData(phase.size, "random");
+
+//       if (!res.destroyed && !isFinished) {
+//         const success = res.write(phaseData);
+//         currentPhase++;
+
+//         if (currentPhase < phases.length) {
+//           if (success) {
+//             setTimeout(sendPhase, phase.delay);
+//           } else {
+//             res.once("drain", () => setTimeout(sendPhase, phase.delay));
+//           }
+//         } else {
+//           // This is the last phase
+//           setTimeout(() => {
+//             if (!isFinished && !res.destroyed) {
+//               res.end();
+//               cleanup();
+//             }
+//           }, phase.delay);
+//         }
+//       }
+//     } catch (error) {
+//       console.error("Error in warmup phase:", error);
+//       if (!res.destroyed && !isFinished) {
+//         res.end();
+//       }
+//       cleanup();
+//     }
+//   };
+
+//   // Handle client disconnect
+//   req.on("close", cleanup);
+//   req.on("aborted", cleanup);
+//   res.on("close", cleanup);
+//   res.on("error", cleanup);
+
+//   // Start sending phases
+//   sendPhase();
+// });
+
+// // FIXED Download test endpoint
+// app.get("/api/download/:size", (req, res) => {
+//   const size = parseFloat(req.params.size);
+//   const pattern = req.query.pattern || "random";
+//   const connections = parseInt(req.query.connections) || 1;
+
+//   if (isNaN(size) || size < 0.1 || size > 10) {
+//     return res
+//       .status(400)
+//       .json({ error: "Invalid size. Must be between 0.1 and 10 MB" });
+//   }
+
+//   try {
+//     const testData = generateTestData(size, pattern);
+//     const startTime = getHighResolutionTime();
+
+//     res.setHeader("Content-Type", "application/octet-stream");
+//     res.setHeader("Content-Length", testData.length.toString());
+//     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+//     res.setHeader("Pragma", "no-cache");
+//     res.setHeader("Expires", "0");
+//     res.setHeader("X-Test-Start", startTime.toString());
+//     res.setHeader("X-Test-Size", size.toString());
+//     res.setHeader("X-Pattern", pattern);
+//     res.setHeader("X-Connections", connections.toString());
+
+//     // Send data in chunks
+//     const chunkSize = 64 * 1024; // 64KB chunks
+//     let offset = 0;
+//     let isFinished = false;
+
+//     const cleanup = () => {
+//       isFinished = true;
+//     };
+
+//     const sendChunk = () => {
+//       if (isFinished || res.destroyed) return;
+
+//       if (offset >= testData.length) {
+//         res.end();
+//         cleanup();
+//         return;
+//       }
+
+//       const chunk = testData.slice(
+//         offset,
+//         Math.min(offset + chunkSize, testData.length)
+//       );
+
+//       try {
+//         const writeSuccess = res.write(chunk);
+//         offset += chunk.length;
+
+//         if (writeSuccess) {
+//           setImmediate(sendChunk);
+//         } else {
+//           res.once("drain", sendChunk);
+//         }
+//       } catch (error) {
+//         console.error("Error writing chunk:", error);
+//         cleanup();
+//       }
+//     };
+
+//     // Handle client disconnect
+//     req.on("close", cleanup);
+//     req.on("aborted", cleanup);
+//     res.on("close", cleanup);
+//     res.on("error", cleanup);
+
+//     sendChunk();
+//   } catch (error) {
+//     console.error("Download test error:", error);
+//     if (!res.headersSent) {
+//       res.status(500).json({ error: "Failed to generate test data" });
+//     }
+//   }
+// });
+
+// // COMPLETELY FIXED Adaptive download endpoint
+// // app.get("/api/download-adaptive", (req, res) => {
+// //   const initialSize = Math.max(parseFloat(req.query.initial) || 1, 0.1);
+// //   const maxSize = Math.min(parseFloat(req.query.max) || 5, 10);
+// //   const duration = Math.min(parseInt(req.query.duration) || 5, 10);
+// //   const pattern = req.query.pattern || "random";
+
+// //   const startTime = getHighResolutionTime();
+// //   let currentSize = initialSize;
+// //   let isFinished = false;
+
+// //   // Set response headers
+// //   res.setHeader("Content-Type", "application/octet-stream");
+// //   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+// //   res.setHeader("Pragma", "no-cache");
+// //   res.setHeader("Expires", "0");
+// //   res.setHeader("X-Test-Type", "adaptive");
+// //   res.setHeader("X-Start-Time", startTime.toString());
+// //   res.setHeader("X-Pattern", pattern);
+// //   res.setHeader("X-Initial-Size", initialSize.toString());
+// //   res.setHeader("X-Max-Size", maxSize.toString());
+// //   res.setHeader("X-Duration", duration.toString());
+
+// //   const cleanup = () => {
+// //     isFinished = true;
+// //   };
+
+// //   const sendData = () => {
+// //     if (isFinished || res.destroyed) return;
+
+// //     const now = getHighResolutionTime();
+// //     const elapsed = (now - startTime) / 1000;
+
+// //     // Check if duration has been reached
+// //     if (elapsed >= duration) {
+// //       if (!res.destroyed && !isFinished) {
+// //         res.end();
+// //       }
+// //       cleanup();
+// //       return;
+// //     }
+
+// //     // Adaptive sizing - gradually increase size
+// //     const progress = elapsed / duration;
+// //     const targetSize =
+// //       initialSize + (maxSize - initialSize) * Math.min(progress * 2, 1);
+// //     currentSize = Math.min(targetSize, maxSize);
+
+// //     try {
+// //       // Generate smaller chunks more frequently for better control
+// //       const chunkSize = Math.max(currentSize * 0.1, 0.1); // 10% of current size or minimum 0.1MB
+// //       const chunkData = generateTestData(chunkSize, pattern);
+
+// //       if (!res.destroyed && !isFinished) {
+// //         const writeSuccess = res.write(chunkData);
+
+// //         // Schedule next chunk
+// //         const nextDelay = Math.max(50, 200 - elapsed * 10); // Decrease delay over time
+
+// //         if (writeSuccess) {
+// //           setTimeout(sendData, nextDelay);
+// //         } else {
+// //           res.once("drain", () => setTimeout(sendData, nextDelay));
+// //         }
+// //       }
+// //     } catch (error) {
+// //       console.error("Error in adaptive download:", error);
+// //       if (!res.destroyed && !isFinished) {
+// //         res.end();
+// //       }
+// //       cleanup();
+// //     }
+// //   };
+
+// //   // Handle client disconnect and errors
+// //   req.on("close", cleanup);
+// //   req.on("aborted", cleanup);
+// //   res.on("close", cleanup);
+// //   res.on("error", (error) => {
+// //     console.error("Response error in adaptive download:", error);
+// //     cleanup();
+// //   });
+
+// //   // Start the adaptive download
+// //   sendData();
+// // });
+// app.get("/api/download-adaptive", (req, res) => {
+//   const initialSize = Math.max(parseFloat(req.query.initial) || 1, 0.1); // MB
+//   const maxSize = Math.min(parseFloat(req.query.max) || 5, 10); // MB
+//   const duration = Math.min(parseInt(req.query.duration) || 5, 10); // seconds
+//   const pattern = req.query.pattern || "random";
+//   const throttle = Math.max(parseFloat(req.query.throttle) || 1, 0.1); // 0.1 = 90% slower
+
+//   const startTime = getHighResolutionTime();
+//   let currentSize = initialSize;
+//   let isFinished = false;
+
+//   // Headers
+//   res.setHeader("Content-Type", "application/octet-stream");
+//   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+//   res.setHeader("Pragma", "no-cache");
+//   res.setHeader("Expires", "0");
+//   res.setHeader("X-Test-Type", "adaptive");
+//   res.setHeader("X-Start-Time", startTime.toString());
+//   res.setHeader("X-Pattern", pattern);
+//   res.setHeader("X-Initial-Size", initialSize.toString());
+//   res.setHeader("X-Max-Size", maxSize.toString());
+//   res.setHeader("X-Duration", duration.toString());
+//   res.setHeader("X-Throttle", throttle.toString());
+
+//   const cleanup = () => {
+//     isFinished = true;
+//   };
+
+//   const sendData = () => {
+//     if (isFinished || res.destroyed) return;
+
+//     const now = getHighResolutionTime();
+//     const elapsed = (now - startTime) / 1000;
+
+//     if (elapsed >= duration) {
+//       if (!res.destroyed && !isFinished) res.end();
+//       cleanup();
+//       return;
+//     }
+
+//     // Progress-based sizing
+//     const progress = elapsed / duration;
+//     const targetSize =
+//       initialSize + (maxSize - initialSize) * Math.min(progress * 2, 1);
+//     currentSize = Math.min(targetSize, maxSize);
+
+//     try {
+//       // Slower: small chunk size and longer delay
+//       const chunkSize = Math.max(currentSize * 0.03 * throttle, 0.05); // ~50KB+
+//       const chunkData = generateTestData(chunkSize, pattern);
+
+//       if (!res.destroyed && !isFinished) {
+//         const writeSuccess = res.write(chunkData);
+
+//         // Slower: stable or increasing delay
+//         const nextDelay = Math.min(300, 100 + elapsed * 10 / throttle);
+
+//         if (writeSuccess) {
+//           setTimeout(sendData, nextDelay);
+//         } else {
+//           res.once("drain", () => setTimeout(sendData, nextDelay));
+//         }
+//       }
+//     } catch (error) {
+//       console.error("Error in adaptive download:", error);
+//       if (!res.destroyed && !isFinished) res.end();
+//       cleanup();
+//     }
+//   };
+
+//   req.on("close", cleanup);
+//   req.on("aborted", cleanup);
+//   res.on("close", cleanup);
+//   res.on("error", (error) => {
+//     console.error("Response error in adaptive download:", error);
+//     cleanup();
+//   });
+
+//   sendData();
+// });
+
+
+// // Upload test endpoint
+// app.post("/api/upload", upload.single("file"), (req, res) => {
+//   const receiveStartTime = getHighResolutionTime();
+//   const clientStartTime =
+//     parseFloat(req.headers["x-upload-start"]) || receiveStartTime;
+//   const testSize = parseFloat(req.headers["x-test-size"]) || 0;
+//   const pattern = req.headers["x-pattern"] || "unknown";
+
+//   try {
+//     let dataSize = 0;
+//     let dataBuffer = null;
+
+//     if (req.file) {
+//       dataSize = req.file.size;
+//       dataBuffer = req.file.buffer;
+//     } else if (req.body && Buffer.isBuffer(req.body)) {
+//       dataSize = req.body.length;
+//       dataBuffer = req.body;
+//     } else {
+//       return res.status(400).json({ error: "No data received" });
+//     }
+
+//     const receiveEndTime = getHighResolutionTime();
+//     const processingTime = receiveEndTime - receiveStartTime;
+//     const totalTime = receiveEndTime - clientStartTime;
+
+//     // Calculate upload speed
+//     const speedMbps =
+//       totalTime > 0 ? (dataSize * 8) / ((totalTime / 1000) * 1024 * 1024) : 0;
+
+//     // Generate a simple checksum for data integrity
+//     const checksum = dataBuffer
+//       ? crypto
+//           .createHash("md5")
+//           .update(dataBuffer)
+//           .digest("hex")
+//           .substring(0, 8)
+//       : "unknown";
+
+//     res.json({
+//       success: true,
+//       timing: {
+//         clientStartTime,
+//         receiveStartTime,
+//         receiveEndTime,
+//         processingTime,
+//         totalTime,
+//       },
+//       data: {
+//         size: dataSize,
+//         expectedSize: testSize,
+//         pattern,
+//         integrity: checksum,
+//       },
+//       performance: {
+//         speedMbps: speedMbps.toFixed(3),
+//         efficiency:
+//           testSize > 0
+//             ? ((dataSize / (testSize * 1024 * 1024)) * 100).toFixed(2)
+//             : "100.00",
+//       },
+//       server: SERVER_INFO.name,
+//     });
+//   } catch (error) {
+//     console.error("Upload test error:", error);
+//     if (!res.headersSent) {
+//       res.status(500).json({
+//         error: "Upload test failed",
+//         details: error.message,
+//       });
+//     }
+//   }
+// });
+
+// // Multi-connection upload endpoint
+// app.post("/api/upload-multi", upload.single("file"), (req, res) => {
+//   const receiveTime = getHighResolutionTime();
+//   const clientStartTime =
+//     parseFloat(req.headers["x-upload-start"]) || receiveTime;
+//   const connectionId = req.headers["x-connection-id"] || "0";
+//   const totalConnections = parseInt(req.headers["x-total-connections"]) || 1;
+//   const testSize = parseFloat(req.headers["x-test-size"]) || 0;
+//   const pattern = req.headers["x-pattern"] || "unknown";
+
+//   try {
+//     let dataSize = 0;
+
+//     if (req.file) {
+//       dataSize = req.file.size;
+//     } else if (req.body && Buffer.isBuffer(req.body)) {
+//       dataSize = req.body.length;
+//     } else {
+//       return res.status(400).json({ error: "No data received" });
+//     }
+
+//     const processTime = getHighResolutionTime();
+//     const networkDuration = receiveTime - clientStartTime;
+//     const processingDuration = processTime - receiveTime;
+//     const totalDuration = processTime - clientStartTime;
+
+//     // Calculate speed for this connection
+//     const speedMbps =
+//       totalDuration > 0
+//         ? (dataSize * 8) / ((totalDuration / 1000) * 1024 * 1024)
+//         : 0;
+
+//     res.json({
+//       success: true,
+//       connectionId,
+//       totalConnections,
+//       timing: {
+//         clientStartTime,
+//         receiveTime,
+//         processTime,
+//         networkDuration,
+//         processingDuration,
+//         totalDuration,
+//       },
+//       data: {
+//         size: dataSize,
+//         expectedSize: testSize,
+//         pattern,
+//         speedMbps: speedMbps.toFixed(3),
+//       },
+//       server: SERVER_INFO.name,
+//     });
+//   } catch (error) {
+//     console.error("Multi-upload test error:", error);
+//     if (!res.headersSent) {
+//       res.status(500).json({
+//         error: "Multi-upload test failed",
+//         connectionId,
+//         details: error.message,
+//       });
+//     }
+//   }
+// });
+
+// // Error handling middleware
+// app.use((error, req, res, next) => {
+//   console.error("Server error:", error);
+//   if (!res.headersSent) {
+//     res.status(500).json({
+//       error: "Internal server error",
+//       message: error.message,
+//       timestamp: getHighResolutionTime(),
+//     });
+//   }
+// });
+
+// // 404 handler
+// app.use((req, res) => {
+//   if (!res.headersSent) {
+//     res.status(404).json({
+//       error: "Endpoint not found",
+//       path: req.path,
+//       timestamp: getHighResolutionTime(),
+//     });
+//   }
+// });
+
+// // Start server
+// const server = app.listen(PORT, () => {
+//   console.log(`\n🚀 Speed Test Server`);
+//   console.log(`📡 Port: ${PORT}`);
+//   console.log(`🖥️  Server: ${SERVER_INFO.name}`);
+//   console.log(`💻 System: ${SERVER_INFO.platform} (${SERVER_INFO.arch})`);
+//   console.log(`⚡ Cores: ${SERVER_INFO.cores}`);
+//   console.log(`🧠 Memory: ${SERVER_INFO.memory}`);
+//   console.log(`\n📋 Available Endpoints:`);
+//   console.log(`   GET  /api/ping                    - Basic ping test`);
+//   console.log(`   GET  /api/info                    - Server information`);
+//   console.log(`   GET  /api/latency-advanced        - Advanced latency test`);
+//   console.log(`   GET  /api/warmup-advanced         - Connection warmup`);
+//   console.log(`   GET  /api/download/:size          - Download test`);
+//   console.log(`   GET  /api/download-adaptive       - Adaptive download test`);
+//   console.log(`   POST /api/upload                  - Upload test`);
+//   console.log(`   POST /api/upload-multi            - Multi-connection upload`);
+//   console.log(`\n✅ Server ready for testing!\n`);
+// });
+
+// // Server optimization
+// server.keepAliveTimeout = 120000;
+// server.headersTimeout = 125000;
+// server.timeout = 300000;
+
+// // TCP optimization
+// server.on("connection", (socket) => {
+//   socket.setNoDelay(true);
+//   socket.setKeepAlive(true, 60000);
+// });
+
+// module.exports = app;
 
 // const express = require('express');
 // const cors = require('cors');
