@@ -130,8 +130,8 @@ app.get("/api/info", (req, res) => {
 
 // Enhanced latency test endpoint
 app.get("/api/latency-advanced", (req, res) => {
-  const count = Math.min(parseInt(req.query.count) || 10, 50);
-  const interval = Math.max(parseInt(req.query.interval) || 100, 50);
+  const count = Math.min(parseInt(req.query.count) || 5, 10);
+  const interval = Math.max(parseInt(req.query.interval) || 50, 100);
 
   const measurements = [];
   let completed = 0;
@@ -261,10 +261,10 @@ app.get("/api/download/:size", (req, res) => {
   const pattern = req.query.pattern || "random";
   const connections = parseInt(req.query.connections) || 1;
 
-  if (isNaN(size) || size < 0.1 || size > 500) {
+  if (isNaN(size) || size < 0.1 || size > 10) {
     return res
       .status(400)
-      .json({ error: "Invalid size. Must be between 0.1 and 500 MB" });
+      .json({ error: "Invalid size. Must be between 0.1 and 10 MB" });
   }
 
   try {
@@ -337,8 +337,8 @@ app.get("/api/download/:size", (req, res) => {
 // COMPLETELY FIXED Adaptive download endpoint
 app.get("/api/download-adaptive", (req, res) => {
   const initialSize = Math.max(parseFloat(req.query.initial) || 1, 0.1);
-  const maxSize = Math.min(parseFloat(req.query.max) || 50, 100);
-  const duration = Math.min(parseInt(req.query.duration) || 10, 30);
+  const maxSize = Math.min(parseFloat(req.query.max) || 5, 10);
+  const duration = Math.min(parseInt(req.query.duration) || 5, 10);
   const pattern = req.query.pattern || "random";
 
   const startTime = getHighResolutionTime();
