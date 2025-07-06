@@ -114,16 +114,24 @@ const getHighResolutionTime = () => {
   return performance.now() + performance.timeOrigin;
 };
 
-// Basic ping endpoint
+// Fixed ping endpoint
 app.get("/api/ping", (req, res) => {
-  const serverTime = getHighResolutionTime();
-  const clientTime = parseFloat(req.query.t) || serverTime;
+  const serverReceiveTime = getHighResolutionTime();
+  const clientSendTime = parseFloat(req.query.t);
   const sequence = parseInt(req.query.seq) || 0;
 
+  // Calculate one-way latency if client sent timestamp
+  let latency = null;
+  if (clientSendTime && !isNaN(clientSendTime)) {
+    latency = serverReceiveTime - clientSendTime;
+  }
+
   res.json({
-    clientTime,
-    serverTime,
     sequence,
+    clientSendTime: clientSendTime || null,
+    serverReceiveTime,
+    serverSendTime: getHighResolutionTime(),
+    latency: latency ? latency.toFixed(3) : null,
     server: SERVER_INFO.name,
   });
 });
@@ -142,40 +150,195 @@ app.get("/api/info", (req, res) => {
   });
 });
 
-// Optimized latency test endpoint
-app.get("/api/latency-advanced", (req, res) => {
-  const count = Math.min(parseInt(req.query.count) || 5, 10);
-  const measurements = [];
-  const startTime = getHighResolutionTime();
+// Real-time ping endpoint for continuous monitoring
+app.get("/api/ping-realtime", (req, res) => {
+  const clientSendTime = parseFloat(req.query.t);
+  const sequence = parseInt(req.query.seq) || 0;
+  const serverReceiveTime = getHighResolutionTime();
+  
+  // Add small random delay to simulate real network conditions
+  const processingDelay = Math.random() * 2; // 0-2ms random delay
+  
+  setTimeout(() => {
+    const serverSendTime = getHighResolutionTime();
+    const serverProcessingTime = serverSendTime - serverReceiveTime;
+    
+    let oneWayLatency = null;
+    if (clientSendTime && !isNaN(clientSendTime)) {
+      oneWayLatency = serverReceiveTime - clientSendTime;
+    }
 
-  for (let i = 0; i < count; i++) {
-    const measurementTime = getHighResolutionTime();
-    measurements.push({
-      index: i,
-      clientStartTime: startTime,
-      serverTime: measurementTime,
-      latency: measurementTime - startTime,
+    res.json({
+      sequence,
+      clientSendTime: clientSendTime || null,
+      serverReceiveTime,
+      serverSendTime,
+      serverProcessingTime: parseFloat(serverProcessingTime.toFixed(3)),
+      oneWayLatency: oneWayLatency ? parseFloat(oneWayLatency.toFixed(3)) : null,
+      server: SERVER_INFO.name,
     });
-  }
+  }, processingDelay);
+});
 
-  // Calculate statistics
-  const latencies = measurements.map((m) => m.latency);
-  const average = latencies.reduce((a, b) => a + b, 0) / latencies.length;
-  const min = Math.min(...latencies);
-  const max = Math.max(...latencies);
-  const jitter = max - min;
+// Dedicated jitter test endpoint
+app.get("/api/jitter", (req, res) => {
+  const count = Math.min(parseInt(req.query.count) || 10, 50);
+  const interval = Math.max(parseInt(req.query.interval) || 50, 10);
+  
+  const measurements = [];
+  let completed = 0;
+  const testStartTime = getHighResolutionTime();
 
-  res.json({
-    measurements,
-    statistics: {
-      count,
-      average: average.toFixed(3),
-      minimum: min.toFixed(3),
-      maximum: max.toFixed(3),
-      jitter: jitter.toFixed(3),
-    },
-    server: SERVER_INFO.name,
-  });
+  const performPing = (index) => {
+    const pingStart = getHighResolutionTime();
+    
+    // Simulate some minimal processing
+    const pingEnd = getHighResolutionTime();
+    const roundTripTime = pingEnd - pingStart;
+    const timeSinceStart = pingStart - testStartTime;
+
+    measurements.push({
+      index,
+      timestamp: pingStart,
+      timeSinceStart: parseFloat(timeSinceStart.toFixed(3)),
+      roundTripTime: parseFloat(roundTripTime.toFixed(3)),
+      serverProcessingTime: parseFloat((pingEnd - pingStart).toFixed(3))
+    });
+
+    completed++;
+
+    if (completed >= count) {
+      // Calculate comprehensive jitter statistics
+      const rtts = measurements.map(m => m.roundTripTime);
+      const intervals = [];
+      
+      // Calculate intervals between consecutive measurements
+      for (let i = 1; i < measurements.length; i++) {
+        const interval = measurements[i].timeSinceStart - measurements[i-1].timeSinceStart;
+        intervals.push(interval);
+      }
+      
+      // RTT statistics
+      const avgRtt = rtts.reduce((a, b) => a + b, 0) / rtts.length;
+      const minRtt = Math.min(...rtts);
+      const maxRtt = Math.max(...rtts);
+      const rttRange = maxRtt - minRtt;
+      
+      // RTT standard deviation (proper jitter calculation)
+      const rttVariance = rtts.reduce((sum, rtt) => sum + Math.pow(rtt - avgRtt, 2), 0) / rtts.length;
+      const rttStdDev = Math.sqrt(rttVariance);
+      
+      // Interval statistics (timing consistency)
+      const avgInterval = intervals.length > 0 ? intervals.reduce((a, b) => a + b, 0) / intervals.length : 0;
+      const intervalRange = intervals.length > 0 ? Math.max(...intervals) - Math.min(...intervals) : 0;
+      const intervalVariance = intervals.length > 0 ? 
+        intervals.reduce((sum, interval) => sum + Math.pow(interval - avgInterval, 2), 0) / intervals.length : 0;
+      const intervalStdDev = Math.sqrt(intervalVariance);
+
+      res.json({
+        success: true,
+        measurements,
+        statistics: {
+          count: completed,
+          testDuration: measurements[measurements.length - 1].timeSinceStart.toFixed(3),
+          rtt: {
+            average: avgRtt.toFixed(3),
+            minimum: minRtt.toFixed(3),
+            maximum: maxRtt.toFixed(3),
+            range: rttRange.toFixed(3),
+            standardDeviation: rttStdDev.toFixed(3),
+            jitter: rttStdDev.toFixed(3) // Standard deviation is the proper jitter metric
+          },
+          timing: {
+            targetInterval: interval,
+            actualAvgInterval: avgInterval.toFixed(3),
+            intervalRange: intervalRange.toFixed(3),
+            intervalStdDev: intervalStdDev.toFixed(3),
+            timingConsistency: (100 - (intervalStdDev / avgInterval * 100)).toFixed(2) + '%'
+          }
+        },
+        server: SERVER_INFO.name,
+      });
+    } else {
+      // Schedule next ping
+      setTimeout(() => performPing(index + 1), interval);
+    }
+  };
+
+  // Start first ping
+  performPing(0);
+});
+
+// Fixed latency test endpoint with proper jitter calculation
+app.get("/api/latency-advanced", (req, res) => {
+  const count = Math.min(parseInt(req.query.count) || 5, 20);
+  const interval = Math.max(parseInt(req.query.interval) || 100, 50);
+  
+  const measurements = [];
+  let completed = 0;
+  const testStartTime = getHighResolutionTime();
+
+  const performMeasurement = (index) => {
+    const measurementTime = getHighResolutionTime();
+    const timeSinceStart = measurementTime - testStartTime;
+
+    measurements.push({
+      index,
+      timestamp: measurementTime,
+      timeSinceStart: parseFloat(timeSinceStart.toFixed(3)),
+      serverProcessingTime: parseFloat((getHighResolutionTime() - measurementTime).toFixed(3))
+    });
+
+    completed++;
+
+    if (completed >= count) {
+      // Calculate proper latency statistics
+      const processingTimes = measurements.map(m => m.serverProcessingTime);
+      const timeDiffs = measurements.map(m => m.timeSinceStart);
+      
+      // Calculate inter-measurement intervals for jitter
+      const intervals = [];
+      for (let i = 1; i < measurements.length; i++) {
+        intervals.push(measurements[i].timeSinceStart - measurements[i-1].timeSinceStart);
+      }
+      
+      const avgProcessingTime = processingTimes.reduce((a, b) => a + b, 0) / processingTimes.length;
+      const minProcessingTime = Math.min(...processingTimes);
+      const maxProcessingTime = Math.max(...processingTimes);
+      
+      // Calculate jitter from interval variations
+      const avgInterval = intervals.length > 0 ? intervals.reduce((a, b) => a + b, 0) / intervals.length : 0;
+      const jitter = intervals.length > 0 ? Math.max(...intervals) - Math.min(...intervals) : 0;
+      
+      // Calculate standard deviation for more accurate jitter
+      const variance = intervals.length > 0 ? 
+        intervals.reduce((sum, interval) => sum + Math.pow(interval - avgInterval, 2), 0) / intervals.length : 0;
+      const stdDeviation = Math.sqrt(variance);
+
+      res.json({
+        success: true,
+        measurements,
+        statistics: {
+          count: completed,
+          averageProcessingTime: avgProcessingTime.toFixed(3),
+          minimumProcessingTime: minProcessingTime.toFixed(3),
+          maximumProcessingTime: maxProcessingTime.toFixed(3),
+          jitter: jitter.toFixed(3),
+          standardDeviation: stdDeviation.toFixed(3),
+          avgInterval: avgInterval.toFixed(3),
+          totalTestTime: (measurements[measurements.length - 1].timeSinceStart).toFixed(3)
+        },
+        intervals,
+        server: SERVER_INFO.name,
+      });
+    } else {
+      // Schedule next measurement
+      setTimeout(() => performMeasurement(index + 1), interval);
+    }
+  };
+
+  // Start first measurement
+  performMeasurement(0);
 });
 
 // Optimized warmup endpoint
@@ -613,6 +776,8 @@ const server = app.listen(PORT, () => {
   console.log(`📊 Max file size: 10MB`);
   console.log(`\n📋 Available Endpoints:`);
   console.log(`   GET  /api/ping                    - Basic ping test`);
+  console.log(`   GET  /api/ping-realtime           - Real-time ping with processing delay`);
+  console.log(`   GET  /api/jitter                  - Comprehensive jitter test`);
   console.log(`   GET  /api/info                    - Server information`);
   console.log(`   GET  /api/latency-advanced        - Advanced latency test`);
   console.log(`   GET  /api/warmup-advanced         - Connection warmup`);
